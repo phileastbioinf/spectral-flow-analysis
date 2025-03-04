@@ -1,0 +1,96 @@
+---
+title: "Automatic QC"
+author: "Phil East"
+format: html
+editor: visual
+date: "14/08/2024"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE,message=FALSE)
+options(cache = TRUE, cache.lazy = FALSE)
+
+```
+
+```{r}
+
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( SingleCellExperiment)
+library( Spectre )
+library( flowCore )
+library( tidyverse )
+library( DT )
+
+preprocess_home <- file.path( "/project", "analyses", "preprocess" )
+flowset_file <- file.path( preprocess_home, "spectral-flowset.rds" )
+```
+
+# Automatic QC
+
+There are a number of approaches that attempt to automatically remove anomalies in flow rate, signal acquisition and outlier events. Packages include [FlowAI](https://www.bioconductor.org/packages/release/bioc/html/flowAI.html), [FlowClean](https://www.bioconductor.org/packages/release/bioc/html/flowClean.html) and [PeacoQC](https://www.bioconductor.org/packages/release/bioc/html/PeacoQC.html).
+
+We ran `PeacoQC` on each of the sample `flowframes` to remove outliers and unstable events.
+
+The PeacoQC package provides quality control functions that will check for monotonic increasing channels, that will remove outliers and unstable events introduced due to e.g. clogs, speed changes etc. during the measurement of your sample. It also provides the functionality of visualising the quality control result of only one sample and the visualisation of the results of multiple samples in one experiment.
+
+
+```{r}
+#| label: peacoqc
+
+fs <- readRDS( flowset_file )
+
+peacoqc_fs_file <- file.path( script_home, "fs_autoqc.rds" )
+peacoqc_results_dir = "peacoqc-results"
+if( !file.exists( peacoqc_fs_file ) ) {
+	#RunPeacoQCandsavethecleanedflowframeasanfcsfileandplottheresults #ofthisqualitycontrolstep. 
+	peacoqc_res<-PeacoQC( ff=fs, 
+                      channels=channels, 
+                      determine_good_cells="all", 
+                      save_fcs=TRUE, 
+                      plot=TRUE, 
+                      output_directory = peacoqc_results_dir )
+	saveRDS( peacoqc, file = peacoqc_fs_file )
+}
+```
+
+## Plots
+
+:::
+
+```{r}
+#| label peacoqc_plots
+#| results: asis
+#| echo: false
+
+peacoqc_plots_path <- file.path( peacoqc_results_dir, "PeacoQC_results", "PeacoQC_plots" )
+plot_files <- dir( peacoqc_plots_path )
+for( i in plot_files ){
+	cat( "### ", sub( "", "", i ), " \n\n" )
+	cat( "![i](file.path( peacoqc_plots_path, i ) )"
+	cat( " \n\n )
+}
+``` 
+
+## Report
+
+```{r}
+#| label: peacoqc_report
+
+report_file <- file.path( "peacoqc_results_dir, "PeacoQC_results", "PeacoQC_report.txt" )
+read.table( file = report_file, sep = "\t", header = TRUE ) %>%
+	DT::datatable()
+```

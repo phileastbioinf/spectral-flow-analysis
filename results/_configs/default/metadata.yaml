@@ -1,0 +1,8 @@
+date-format: "Do MMMM, YYYY"
+
+filters:
+  - search-replace
+search-replace:
+  +attachments: "[attachments](#attachments-1)"
+  +nextflow: "[Nextflow](https://www.nextflow.io)"
+  +nfcore: "[nf-core](https://nf-co.re)"

@@ -1,0 +1,220 @@
+---
+title: "SCT051_spectral"
+author: "[Sophie de Carne](mailto:Sophie.deCarne@crick.ac.uk)"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    mainfont: "Avenir"
+    css: styles.css
+editor: visual
+toc: true
+toc-depth: 3
+toc-expand: 1
+toc-location: left
+toc_fold: true
+anchor-sections: true
+---
+
+# Experiment
+
+**Cells and mice \|** KPARG12D cells in C57BL/6J (BRAC). All males because no females with matching age available at the time of the experiment.
+
+**Treatment \|** Started at d-\_. Mice receive AZD4635 (\_mg/kg) \_days a week and aCD73 (250 ug/mouse) IgG control (mIgG2A), A2ARi (AZD4635), anti-CD73 (Oleclumab 2C5 mIgG2A), A2ARi + anti-CD73 combo.
+
+**Cell transplant \|** d0 (14/02/24). 1.5E05 cells injected in 200 ul.
+
+|                      | Luna pre-injection | Luna post-injection |
+|----------------------|--------------------|---------------------|
+| injected cells, all  | 1.52E05            | 1.09E05             |
+| injected cells, live | 1.41E05            | 9.61E04             |
+| viability            | 92%                | 88%                 |
+| single-cell fraction | 99%                | 100%                |
+
+**Other info \|** Weight is the median of 3 measurements made at d-2, d1 and d5 (12, 15 and 19/02/24).
+
+# Prepare the environment
+
+## Libraries
+
+```{r message=FALSE warning=FALSE}
+# data organisation, carpentry
+library(plyr)
+library(tidyverse) # Suite of packages for data manipulation and visualization (ggplot2, dplyr, tidyr, readr, purrr, tibble)
+library(data.table) # Provides an enhanced version of data frames, which are faster and allow easier manipulation of large datasets
+library(future.apply)
+library(stringr)
+library(Rfast)
+
+# to deal with flow data
+library(Spectre) # Analysis toolkit for mass cytometry and other high-dimensional data
+Spectre::package.load() # Loads necessary dependencies and data from the Spectre package
+library(flowCore) # Provides S4 infrastructure for flow cytometry data, including basic data and metadata handling
+
+# dimension reduction
+library(Rphenograph) # Implements the PhenoGraph clustering method which is useful for high-dimensional data
+library(Rtsne) # Implements T-distributed Stochastic Neighbor Embedding (t-SNE) for dimensionality reduction
+library(phateR) # PHATE method for dimensionality reduction, preserving both local and global structures
+library(uwot) # Implements the Uniform Manifold Approximation and Projection (UMAP) for dimensionality reduction
+library(cytoMEM) # Specifically designed for cytometry data, provides tools for Minimum Event Median dimensionality reduction
+library(flowTrans)
+
+# plotting
+library(pals) # Provides color palettes for data visualization, enhancing the display of data structures
+library(gridExtra) # Provides functions for arranging multiple grid-based plots, enhancing plot layouts
+library(ggcyto) # Tailored for visualizing cytometry data using ggplot2 syntax, integrates with the `flowCore` data structures
+```
+
+# Load the data
+
+## Select the FCS files to load
+
+```{r}
+# Find all FCS in the directory
+fileNames <- list.files(
+  path = "01_input/FlowJo_preprocessed_files/", pattern = "*.fcs",
+  full.names = TRUE, ignore.case = TRUE
+)
+
+# Remove the unstained control from the list
+unstained_files <- grepl( "unstained", fileNames, ignore.case = TRUE )
+if ( length( unstained_files) > 0 ) {
+  fileNames <- fileNames[!unstained_files]
+}
+fileNames
+```
+
+## Inspect one file
+
+```{r warning=FALSE}
+ff <- read.FCS( fileNames[1], emptyValue = FALSE )
+```
+
+### Look at the Flowframe parameters
+
+Description of the parameters (marker names)
+
+```{r}
+as.vector( ff@parameters$desc )
+```
+
+### Look at the expression
+
+```{r}
+View( ff@exprs )
+```
+
+## Tidy the flowframe
+
+### Convert flowframe to a datatable as Spectre() works with datatable
+
+```{r}
+exprn <- as.data.table( ff@exprs )
+```
+
+### Inspect the column names and change to meaningful
+
+```{r}
+colnames( exprn )
+```
+
+### Rename the column names with `description` (marker names) found in `parameters` in the flowframe
+
+```{r}
+colnames( exprn )[4:39] <- ( ff@parameters$desc )[4:39]
+setnames( exprn, 3, "AF" )
+colnames( exprn )
+```
+
+### Add the filename back to the data and add a sample_id
+
+```{r}
+exprn <- exprn %>% 
+  mutate(
+    file = basename( ff@description$FILENAME ),
+    sample_id = as.numeric( str_extract( file, "(?<=Well_)[0-9]+" ) )
+  ) %>% 
+  arrange(
+    sample_id
+  ) %>% 
+  select( sample_id, file, AF, `L_D`, `FSC-A`, `SSC-A`, everything() ) %>% 
+  setnames( c( "sample_id", "file", "AF", "L_D", "FSC-A", "SSC-A", "Pd-l1", "Sirpa", "Cd4", "Cd86", "Cd49b", "Cd107a", "B220", "Cd11c", "mKi67", "Tim3", "Cd62l", "Cd3", "Cd44", "Cd11b", "Cd69", "Cd19", "Cd103", "Pd-1", "Ly6g", "Ly6c", "Cd73", "H2-Kb", "Ctla-4", "A2ar", "Nk1.1", "Cd64", "Mertk", "Cd39", "Cd45", "SigF", "Mhc-II", "Cd71", "Cd8a", "Arg1", "Foxp3" ) )
+
+colnames( exprn )
+head( exprn )
+```
+
+# Build the flowframe with all FCS files
+
+## Load the FCS files into a Flowframe
+
+load the files and add the file names
+
+```{r warning=FALSE}
+# Function to process each file
+process_file <- function( x ) {
+  ff <- read.FCS( x, emptyValue = FALSE )
+  this_data <- as.data.table( ff@exprs )
+  setnames( this_data, as.vector( ff@parameters$desc ) )  # Set all names at once
+  setnames( this_data, 3, "AF" )  # Rename third column to 'AF'
+  setnames( this_data, 4:39, ff@parameters$desc[4:39] )  # Rename other columns
+  this_data[, file := basename( ff@description$FILENAME )]  # Add file name
+  this_data[, sample_id := as.numeric( str_extract( file, "(?<=Well_)[0-9]+" ) )] # extract sample ids
+  setorder( this_data, sample_id ) # rank the samples based on sample id
+  setcolorder( this_data, c("sample_id", "file", "AF", "L_D" ), before = "FSC-A" )
+  return( this_data )
+}
+
+# Apply function to all files in parallel
+exprn <- lapply( fileNames, process_file )
+exprn <- rbindlist( exprn )  # Combine all data.tables
+```
+
+## Replace column names with mouse nomenclature
+
+Print the column names of the large datatable
+
+```{r}
+colnames( exprn )
+```
+
+Rewrite the names
+
+```{r}
+exprn <- exprn %>% 
+  setnames( c( "sample_id", "file", "AF", "L_D", "FSC-A", "SSC-A", "Pd-l1", "Sirpa", "Cd4", "Cd86", "Cd49b", "Cd107a", "B220", "Cd11c", "mKi67", "Tim3", "Cd62l", "Cd3", "Cd44", "Cd11b", "Cd69", "Cd19", "Cd103", "Pd-1", "Ly6g", "Ly6c", "Cd73", "H2-Kb", "Ctla-4", "A2ar", "Nk1.1", "Cd64", "Mertk", "Cd39", "Cd45", "SigF", "Mhc-II", "Cd71", "Cd8a", "Arg1", "Foxp3" ) )
+```
+
+# Transform the data for dimension reduction
+
+## Arcsinus transformation (only run once!)
+
+```{r}
+to.asinh <- colnames( exprn )[7:41]
+exprn <- do.asinh( exprn, use.cols = to.asinh, cofactor = 10000 )
+```
+
+plot the number of events per sample
+
+```{r}
+events_per_sample <- table( exprn$sample_id )
+barplot( events_per_sample, col = "#0E4A4A" )
+```
+
+## Plot the transformed data
+
+Sample the data to save computing time whilst trials and error
+
+```{r}
+set.seed( 1234 )
+sample_dt <- exprn %>% 
+  sample_n( 75000 )
+```
+
+Plot the
+
+```{r}
+ggplot( exprn, aes( x = Cd4, y = Nk1.1 ) ) +
+  geom_hex( bins = 256 ) +
+  facet_wrap( ~sample_id )
+```

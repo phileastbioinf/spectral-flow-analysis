@@ -1,0 +1,63 @@
+---
+title: "FCS Parameters"
+author: "Phil East"
+format: html
+editor: visual
+date: "14/08/2024"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE,message=FALSE)
+options(cache = TRUE, cache.lazy = FALSE)
+
+```
+
+# FCS Parameters
+
+Below is a listing of the parameters contained in the FCS files and reported in the `flowSet`
+object constructed from the fcs files. 
+
+```{r}
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( SingleCellExperiment)
+library( Spectre )
+library( flowCore )
+library( tidyverse )
+library( DT )
+
+preprocess_home <- file.path( "/project", "analyses", "preprocess" )
+flowset_file <- file.path( preprocess_home, "spectral-flowset.rds" )
+```
+
+```{r}
+#| label: fcs_params
+
+fs <- readRDS( flowset_file )
+
+fs %>%
+  map( keyword ) %>%
+  map( as.data.frame ) %>%
+  bind_rows( ) %>%
+  mutate( sample_id = sampleNames( fs ) ) %>%
+  relocate( sample_id, .before = 1 ) %>%
+  DT::datatable(
+    selection = 'none', rownames = '', filter = 'none',
+    extensions = "FixedColumns",
+    options = list(
+      paging = TRUE, searching = TRUE, info = FALSE,
+      sort = TRUE, scrollX = TRUE, fixedColumns = list(leftColumns = "sample_id") ) )
+```

@@ -1,0 +1,63 @@
+format:
+  html: # https://quarto.org/docs/reference/formats/html.html
+    # code
+    code-annotations: hover
+    code-block-bg: true
+    code-block-border-left: false
+    code-copy: hover
+    code-fold: true
+    code-line-numbers: false
+    code-link: false
+    code-overflow: scroll
+    code-tools:
+      source: false
+      toggle: true
+      caption: none
+    highlight-style: arrow
+
+    # fonts
+    fontsize: 1rem
+    linestretch: 1.75
+    mainfont: Trebuchet MS
+    monofont: Menlo
+
+    # footnotes
+    footnotes-hover: false
+    reference-location: document
+
+    # format options
+    anchor-sections: true
+    minimal: false
+    smooth-scroll: true
+    theme:
+      - flatly
+
+    # layout
+    appendix-style: default
+    cap-location: margin
+    fig-cap-location: margin
+    tbl-cap-location: margin
+    title-block-banner: true
+
+    # links
+    link-external-filter: bioinformatics.crick.ac.uk|bioinformatics.thecrick.org|github.com/BABS-STP
+    link-external-icon: false
+    link-external-newwindow: true
+
+    # table of contents
+    toc: true
+    toc-depth: 3
+    toc-expand: 1
+    toc-location: left
+    toc-title: Contents
+
+    # references
+    #bibliography:
+    #  - _configs/project/bibliography.bib
+    citation-location: document
+    citations-hover: true
+    citeproc: true
+
+  # gfm: default
+  # pdf: default
+  # docx: default

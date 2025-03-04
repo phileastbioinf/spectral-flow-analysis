@@ -1,0 +1,16 @@
+book:
+  title: Spectral Flow Analysis
+
+  sidebar:
+    title: Analysis steps
+    contents:
+      - index.qmd
+
+  chapters:
+    - index.qmd
+    - preprocess/preprocess.qmd
+    - transformation/transformation.qmd
+    - fcs-parameters/fcs-parameters.qmd
+    - cell-ident/cell-ident-BRAC8938.5a.qmd
+    - cell-ident-merged/cell-ident-merged.qmd
+    - cell-ident-bycelltype/cell-ident-bycelltype.qmd

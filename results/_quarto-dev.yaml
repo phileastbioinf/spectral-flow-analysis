@@ -1,0 +1,7 @@
+format:
+  html:    
+    code-tools:
+      source: true
+
+project:
+  output-dir: _website-dev

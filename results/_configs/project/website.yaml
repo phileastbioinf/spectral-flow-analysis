@@ -1,0 +1,17 @@
+website:
+  title: BABS Project ts245
+  description: BABS reports
+  # site-path: /projects/babs/christopher.barrington/CB23003
+  # repo-url: http://github.com/BABS-STP/cb001
+  render:
+    - "index.qmd"
+    - "qc.qmd"
+    - "dge.qmd"
+    - "pathway.qmd"
+    - "arc.qmd"
+
+  sidebar:
+    - title: Analysis steps
+      contents:
+        - index.qmd
+

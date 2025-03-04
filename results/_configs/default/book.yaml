@@ -1,0 +1,24 @@
+book:
+  title: _configs/default/book.yaml/title
+  favicon: _assets/img/black-logo.jpg
+  site-url: https://bioinformatics.thecrick.org/users
+
+  search:
+    location: sidebar
+    type: textbox
+    copy-button: true
+    collapse-after: 6
+
+  navbar: false
+
+  sidebar:
+    id: sidebar
+    title: _configs/default/book.yaml/sidebar/title
+    logo: _assets/img/colour-logo.png
+    align: center
+    contents: auto
+    border: true
+    collapse-level: 1
+
+  page-navigation: false
+  back-to-top-navigation: false

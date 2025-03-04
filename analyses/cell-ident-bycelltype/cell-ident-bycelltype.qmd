@@ -1,0 +1,168 @@
+---
+title: "Cell characterisation - by celltype"
+author: "Phil East"
+format: html
+editor: visual
+date: "14/08/2024"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE,message=FALSE)
+options(cache = TRUE, cache.lazy = FALSE)
+
+```
+
+```{r}
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( SingleCellExperiment)
+library( Spectre )
+library( flowCore )
+library( tidyverse )
+library( DT )
+
+library( flowViz )
+library( flowVS )
+library( flowAI )
+library( PeacoQC )
+library( CATALYST )
+library( CytoNorm )
+library( uwot )
+library( grid )
+library( ggplot2 )
+library(Rphenograph)
+
+transformation_home <- file.path( "/project", "analyses", "transformation" )
+flowset_file <- file.path( transformation_home, "fs_sub_flowvs.rds" )
+
+cell_ident_merged_home <- file.path( "/project", "analyses", "cell-ident-merged" )
+sce_file_name <- "merged_sce_samp.rds"
+sce_file_path <- file.path( cell_ident_merged_home, "objects", sce_file_name )
+
+script_home <- file.path( "/project", "analyses", "cell-ident-bycelltype" )
+data_home <- file.path( "/project", "data" )
+sce_celltype_file <- "sce_celltype.rds"
+sce_celltype_path <- file.path( script_home, sce_celltype_file )
+
+ab_file_name <- "antibody_table.csv"
+ab_file_path <- file.path( "/project", "data", ab_file_name )
+ab_dat <- read.csv( file = ab_file_path )
+```
+
+# Celltype clustering
+
+We split the cells into their top level cell type classification and reclustered them.
+
+```{r}
+#| label: celltype analysis
+
+sce_merged_samp <- readRDS( sce_file_path )
+antibodies <- rownames( sce_merged_samp )
+
+cluster_to_celltype_file <- "cluster-to-celltype-map-level1.csv"
+cluster_to_celltype_path <- file.path( data_home, cluster_to_celltype_file )
+cluster_to_celltype_df <- read.csv( file = cluster_to_celltype_path, 
+                          colClasses = c( "character", "factor" ) )
+celltypes <- levels( cluster_to_celltype_df$celltype )
+
+antibodies_to_celltype_file <- "antibody-to-celltype-map.csv"
+antibody_to_celltype_path <- file.path ( data_home, antibodies_to_celltype_file )
+antibody_to_celltype_df <- read.csv( file = antibody_to_celltype_path )
+
+if( file.exists( sce_celltype_path ) ) {
+  sce_celltypes <- readRDS( sce_celltype_path )
+} else {
+  sce_celltypes <- map( celltypes, function( cell ) {
+    clusters <- cluster_to_celltype_df %>%
+      filter( celltype == cell ) %>%
+      pull( cluster )
+    cell_f <- as.character( colData( sce_merged_samp )$louvian ) %in% clusters 
+  
+    celltype_antibodies <- antibody_to_celltype_df %>%
+      filter( celltype == cell ) %>%
+      pull( antibody )
+    antibody_f <- rowData( sce_merged_samp )$antibody %in% celltype_antibodies
+    sce <- sce_merged_samp[ antibody_f, cell_f ]
+  
+    umap_dr <- umap( t( assays( sce )$flowvs ), 
+                     n_neighbors = 15, 
+                     min_dist = 0.1 )
+    reducedDim( sce, "UMAP" ) <- umap_dr
+  
+    # Assume 'data' is a matrix with cells as rows and markers as columns.
+    k <- 200  # You can adjust k based on your dataset
+    result <- Rphenograph( t( assays( sce )$flowvs ), k )
+    clusters <- as.factor( membership( result[[2]] ) )
+    colData( sce )$louvian <- clusters
+    sce
+  } ) %>% 
+    setNames( celltypes )
+  saveRDS( sce_celltypes, sce_celltype_path )
+}
+```
+
+## Clustering
+
+```{r}
+#| label: visualisation
+
+umap_plots <- sce_celltypes %>%
+  map( function( sce ) {
+    l <- list( clusters = plotDR( sce, "UMAP", assay = "flowvs", color_by = "louvian" ) )
+    l$antibodies <- rowData( sce )$antibody %>%
+	    map( function( i ) {
+   	    plotDR( sce, "UMAP", assay = "flowvs", color_by = i )
+    	} ) %>%
+    setNames( rowData( sce )$antibody )
+    l
+  } )
+```
+
+::: panel-tabset
+```{r}
+#| label: render_clustering
+#| results: asis
+#| echo: false
+
+iwalk( umap_plots, function( l, celltype ) { 
+  cat('### ', celltype, '\n\n')
+  grid::grid.newpage()
+  grid::grid.draw( l$cluster )
+  cat( ' \n\n')
+} )
+```
+:::
+
+::: panel-tabset
+```{r}
+#| label: render_antibody_exprs
+#| results: asis
+#| echo: false
+
+iwalk( umap_plots, function( l, celltype ) { 
+  cat('### ', celltype, '\n\n')
+  cat( ':::{.panel-tabset} \n\n' ) 
+  iwalk( l$antibodies, function( gg, antibody ) {
+    cat('#### ', antibody, '\n\n')
+    grid::grid.newpage()
+    grid::grid.draw( gg )
+    cat( ' \n\n')
+  } )
+  cat( ':::' )
+  cat( ' \n\n')
+} )
+```
+:::

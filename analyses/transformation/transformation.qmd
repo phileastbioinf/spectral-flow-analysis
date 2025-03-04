@@ -1,0 +1,382 @@
+---
+title: "Transformation"
+author: "Phil East"
+format: html
+editor: visual
+date: "14/08/2024"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE,message=FALSE)
+options(cache = TRUE, cache.lazy = FALSE)
+
+```
+
+# Transformation
+
+```{r}
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( SingleCellExperiment)
+library( Spectre )
+library( flowCore )
+library( tidyverse )
+library( DT )
+library( grid )
+library( patchwork )
+library( flowTrans )
+library( flowViz )
+library( flowVS )
+
+jsc <- 'function(settings, json) { $(this).parents(".datatables").remove(); }'
+
+options(bitmapType='cairo')
+
+flow_data_home <- file.path( "/project/data/240904_preprocessed_240903_unmixed")
+exp_design_file <- file.path( flow_data_home, "SCT051_sample_list.csv" )
+script_home <- file.path( "/project", "analyses", "transformation" )
+preprocess_home <- file.path( "/project", "analyses", "preprocess" )
+```
+
+```{r}
+#| include: FALSE
+# Init Step to make sure that the dependencies are loaded
+htmltools::tagList(datatable(mtcars))
+```
+
+## Data In
+
+We read in the FCS files using `flowCore` and create a `flowset` object containg per-sample `flow` data objects containing all cells.
+
+```{r}
+#| label: read_fcs
+ab_col_ind <- c( 10:42, 44, 45 )
+flowset_file <- file.path( preprocess_home, "spectral-flowset.rds" )
+if( file.exists( flowset_file )) {
+   fs <- readRDS( flowset_file )
+}
+```
+
+## Subsample cells
+
+We sub sample the cells to create more manageable set of cells (5000). We are using all cells in this analysis.
+
+```{r}
+#| label: subsample_cells
+
+all_cells <- TRUE
+sample_size <- 5000
+
+if( all_cells ) {
+  fs_sub <- fs
+} else {
+  set.seed( 1000 )
+  fs_sub <- fsApply(fs, function(ff) {
+    idx <- sample.int(nrow(ff), min(sample_size, nrow(ff)))
+    ff[idx,]
+  })
+}
+```
+
+## Transformation
+
+We used flowViz and flowTrans to apply arcsinh transformation to the antibody intensiy values.
+
+-   flowViz applies a dynamic cofactor to the arcsinh transformation
+
+-   flowTrans applies a fixed value.
+
+flowViz's dynamic approach centres the negative background distribution around zero. flowTrans tends to split the negative distribution across zero, depending on the cofactor used (see flowTrans results at the bottom of this report).
+
+```{r}
+#| label: transform_markers
+
+markerstotransform <- colnames( fs_sub[[1]] )[ ab_col_ind ]
+
+```
+
+### flowViz arcsin transformation
+
+```{r}
+#| label: flowvs
+
+fs_sub_cofactors_file <- file.path( script_home, "fs_sub_cofactors.csv")
+if( file.exists( fs_sub_cofactors_file) ) {
+  cofactors_df <- read.csv( fs_sub_cofactors_file )
+  cofactors <- cofactors_df %>%
+    mutate( cofactors = ifelse( !is.na( revised_cofactors), revised_cofactors, cofactors ) ) %>%
+    pull( cofactors )
+} else {
+  cofactors <- estParamFlowVS( fs_sub, channels = markerstotransform )
+  cofactors_df <- data.frame( markerstotransform, cofactors )
+  write.csv( cofactors_df, file = fs_sub_cofactors_file )
+}
+
+fs_sub_flowvs_file <- file.path( script_home, "fs_sub_flowvs.rds")
+if( file.exists( fs_sub_flowvs_file) ) {
+  fs_sub_flowvs <- readRDS( fs_sub_flowvs_file )
+} else {
+  fs_sub_flowvs <- transFlowVS( fs_sub, channels = markerstotransform, cofactors )
+  saveRDS( fs_sub_flowvs, fs_sub_flowvs_file)
+}
+cofactors_df %>%
+  DT::datatable()
+```
+
+### test plots
+
+We generated transformed intensity profiles for antibodies where flowviz was unable to anutomatically identy a suitable arcsinh cofacort. In these instances we selected the cofactor manually.
+
+```{r}
+#| label: manual_cofactor
+#| eval: false
+
+ab_int <- 10
+cofactors[ ab_int ] <- 1000
+fs_sub_flowvs <- transFlowVS( fs_sub[1], channels = markerstotransform, cofactors )
+gg <- fs_sub_flowvs[[1]]@exprs[, ab_col_ind[ ab_int ] ] %>%
+          as.data.frame( ) %>%
+          gather( antibody, intensity ) %>%
+          ggplot( aes( x = intensity, fill = antibody, colour = antibody )) +
+          geom_density( alpha = 0.2 ) +
+          labs( x = "asinh fluorescence intensity")
+png( file = file.path( script_home, "trans_test.png" ), width = 900 )
+print( gg )
+dev.off()
+```
+
+#### Distributions
+
+```{r}
+#| label: asinh_flowvs_dists
+
+bySample <- TRUE
+
+antibody_group <- data.frame( antibody = colnames( fs_sub )[ ab_col_ind ],
+                              group_6 = sequence( c( rep( 6, floor( length( ab_col_ind )/6 ) ), length( ab_col_ind ) %% 6 ) ),
+                              group = 1:length( ab_col_ind ) )
+
+asinh_flowvs_density_plot_file <- file.path( script_home, "fluorescence_density_plots_asinh_flowvs.rds" )
+if( file.exists( asinh_flowvs_density_plot_file ) ) {
+  asinh_flowvs_density_plots <- readRDS( asinh_flowvs_density_plot_file )
+} else {
+  asinh_flowvs_density_plots <- fs_sub_flowvs %>% 
+      map( function( ff ) {
+        ff@exprs[, ab_col_ind ] %>%
+          as.data.frame( ) %>%
+          gather( antibody, intensity ) %>%
+          left_join( antibody_group, by = "antibody" ) %>%
+          group_split( group ) %>%
+          map( function( df ) {
+            ggplot( df, aes( x = intensity, fill = antibody, colour = antibody )) +
+            geom_density( alpha = 0.2 ) +
+            labs( x = "asinh fluorescence intensity")
+          } ) %>%
+             setNames( colnames( ff )[ ab_col_ind ] )
+      } ) %>%
+        setNames( sampleNames( fs_sub_flowvs ) )
+    saveRDS( asinh_flowvs_density_plots, asinh_flowvs_density_plot_file )
+}
+```
+
+::: panel-tabset
+```{r}
+#| label: render_asinh_flowvs_fluor_dist_plots
+#| fig-width: 9
+#| fig-height: 4
+#| fig-cap: fluorescence density plots
+#| results: asis
+#| echo: false
+
+  iwalk( asinh_flowvs_density_plots, function( ggl, label ) { 
+    cat('##### ', label, '\n\n')
+    cat(':::{.panel-tabset} \n' )
+    iwalk( ggl, ~{
+      cat('######', .y, '\n\n')
+      grid::grid.newpage()
+      grid::grid.draw( .x )
+      cat( " \n\n" )
+    })
+    cat(':::\n\n')
+  })
+```
+:::
+
+## Background metrics
+
+We plotted the distributions of FSC.A, SSC.A and FJComp.AF.A.
+
+```{r}
+#| label: bg_metrics
+
+bg_density_plot_file <- file.path( script_home, "bg_density_plots.rds" )
+if( file.exists( bg_density_plot_file ) ) {
+  bg_density_plots <- readRDS( bg_density_plot_file )
+} else {
+  bg_density_plots <- fs_sub %>% 
+    map( function( ff ) {
+      ff@exprs[, c( 1:9, 43, 46 ) ] %>%
+        as.data.frame( ) %>% 
+        gather( bg_metric, intensity ) %>%
+        ggplot( aes( x = intensity, fill = bg_metric, colour = bg_metric )) +
+        geom_density( alpha = 0.2 ) +
+        labs( x = "bg intensity") +
+        scale_x_log10()
+    } )
+  saveRDS( bg_density_plots, bg_density_plot_file )
+}
+```
+
+### Distributions
+
+::: panel-tabset
+```{r}
+#| label: render_bg_dist_plots
+#| fig-width: 12
+#| fig-cap: backgrond density plots
+#| results: asis
+#| echo: false
+
+iwalk( bg_density_plots, function( gg, label ) { 
+  cat('#### ', label, '\n\n')
+  grid::grid.newpage()
+  grid::grid.draw( gg )
+  cat( " \n\n" )
+})
+```
+:::
+
+## Raw fluoresence distributions
+
+```{r}
+#| label: raw_fluor_dists
+#| warning: false
+
+raw_density_plot_file <- file.path( script_home, "raw_fluorescence_density_plots.rds" )
+if( file.exists( raw_density_plot_file ) ) {
+  raw_density_plots <- readRDS( raw_density_plot_file )
+} else {
+  raw_density_plots <- fs_sub %>% 
+    map( function( ff ) {
+      ff@exprs[, ab_col_ind ] %>%
+        as.data.frame( ) %>%
+        gather( antibody, intensity ) %>%
+        left_join( antibody_group, by = "antibody" ) %>%
+        group_split( group_6 ) %>%
+        map( function( df ) {
+          ggplot( df, aes( x = intensity, fill = antibody, colour = antibody )) +
+          geom_density( alpha = 0.2 ) +
+          labs( x = "fluorescence intensity") +
+          xlim( -5000, 10000 )
+        } )
+    } ) %>%
+    setNames( sampleNames( fs_sub ) )
+  saveRDS( raw_density_plots, raw_density_plot_file )
+}
+```
+
+### Distributions
+
+::: panel-tabset
+```{r}
+#| label: render_raw_fluor_dist_plots
+#| fig-width: 12
+#| fig-height: 18
+#| fig-cap: raw fluorescence density plots
+#| results: asis
+#| echo: false
+#| warning: false
+
+iwalk( raw_density_plots, function( ggl, label ) { 
+  gg <- ggl |> wrap_plots( ncol = 1, heights = unit( 5, "cm" ))
+  cat('#### ', label, '\n\n')
+  grid::grid.newpage()
+  grid::grid.draw( gg )
+  cat( " \n\n" )
+})
+```
+:::
+
+### flowTrans
+
+flowTrans gives for following warning for all samples.
+
+```{r}
+#| label: flowtrans
+#| eval: false
+  
+fs_sub_trans_file <- file.path( script_home, "fs_sub_trans.rds") 
+if( file.exists( fs_sub_trans_file) ) {   
+  fs_sub_trans <- readRDS( fs_sub_trans_file ) 
+} else {   
+  fs_sub_trans <- fsApply( fs_sub, function( x ){     
+    flowTrans( x, "mclMultivArcSinh", 
+               markerstotransform, 
+               n2f=FALSE,              
+               parameters.only=FALSE )   
+  } )   
+  saveRDS( fs_sub_trans, fs_sub_trans_file) 
+}
+```
+
+### Distributions
+
+```{r}
+#| label: asinh_fluor_dists  
+#| eval: false
+
+antibody_group <- data.frame( antibody = colnames( fs_sub )[ ab_col_ind ],                                 group = sequence( c( rep( 6, floor( length(ab_col_ind )/6 ) ), length( ab_col_ind ) %% 6 ) ) )  
+
+asinh_density_plot_file <- file.path( script_home, "fluorescence_density_plots_asinh.rds" ) 
+if( file.exists( asinh_density_plot_file ) ) {   
+  asinh_density_plots <- readRDS( asinh_density_plot_file ) 
+} else {   
+  asinh_density_plots <- fs_sub_trans %>%      
+    map( function( ff ) {       
+      ff$result@exprs[, ab_col_ind ] %>%         
+        as.data.frame( ) %>%         
+        gather( antibody, intensity ) %>%         
+        left_join( antibody_group, by = "antibody" ) %>%         
+        group_split( group ) %>%         
+        map( function( df ) {           
+          ggplot( df, aes( x = intensity, fill = antibody, colour = antibody )) +   
+            geom_density( alpha = 0.2 ) +           
+            labs( x = "asinh fluorescence intensity")         
+        } )     
+    } )   
+  saveRDS( asinh_density_plots, asinh_density_plot_file ) 
+}
+```
+
+::: panel-tabset
+```{r}
+#| label: render_asinh_fluor_dist_plots 
+#| fig-width: 12 
+#| fig-height: 18 
+#| fig-cap: fluorescence density plots
+#| results: asis 
+#| echo: false
+#| eval: false
+
+iwalk( asinh_density_plots, function( ggl, label ) {    
+  gg <- ggl |> wrap_plots( ncol = 1, heights = unit( 5, "cm" ))   
+  cat('#### ', label, '\n\n')   
+  grid::grid.newpage()   
+  grid::grid.draw( gg )   
+  cat( " \n\n" ) 
+})
+```
+:::

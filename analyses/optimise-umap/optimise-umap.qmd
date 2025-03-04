@@ -1,0 +1,260 @@
+---
+title: "Cell-type Identification"
+author: "Phil East"
+format: html
+editor: visual
+date: "14/08/2024"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE,message=FALSE)
+options(cache = TRUE, cache.lazy = FALSE)
+
+```
+
+```{r}
+
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( SingleCellExperiment)
+library( Spectre )
+library( flowCore )
+library( tidyverse )
+library( DT )
+
+library( flowViz )
+library( flowVS )
+library( flowAI )
+library( PeacoQC )
+library( CATALYST )
+library( CytoNorm )
+library( uwot )
+library( grid )
+library( ggplot2 )
+
+flow_data_home <- file.path( "/project/data/240904_preprocessed_240903_unmixed")
+exp_design_file <- file.path( flow_data_home, "SCT051_sample_list.csv" )
+
+preprocess_home <- file.path( "/project", "analyses", "preprocess" )
+flowset_file <- file.path( preprocess_home, "fs_sub_flowvs.rds" )
+
+script_home <- file.path( "/project", "analyses", "cell-ident" )
+
+Downsampling_FlowSet <- function(x, samplesize , replace=TRUE, prob=NULL){
+  if(missing(samplesize))
+    samplesize <- min(flowCore::fsApply(x,nrow))
+  flowCore::fsApply(x, function(ff){
+    i <- sample(nrow(ff), size = samplesize, replace=replace, prob)
+    ff[i,]
+  })
+}
+```
+
+# Cell-type Identification
+
+## UMAP
+
+```{r}
+#| label: umap
+
+pdat <- read.csv( file = exp_design_file ) %>%
+  #mutate( file = file.path( flow_data_home, file )) %>%
+  mutate( sample_id = mouse )
+fs <- readRDS( flowset_file )
+
+ab_col_ind <- c( 10:42, 44, 45 )
+
+sces <- map( sampleNames( fs ), function( sample_id ) {
+  ff <- fs[[ sample_id ]]
+  SingleCellExperiment( assays = list( flowvs = t( ff@exprs[, ab_col_ind ] ) ),
+                        colData = data.frame( ff@exprs[, c( 1:9, 43, 46 ) ], 
+                                              sample_id = sample_id ),
+                        rowData =  data.frame( antibody = colnames( ff )[ ab_col_ind ] ),
+                        metadata = list( cluster_codes = 1 ) )
+} ) %>%
+  setNames( sampleNames( fs ) )
+
+sce_merged <- do.call( 'cbind', sces )
+```
+
+### Parameter selection
+
+#### n_neighbors
+
+```{r}
+#| label: umap_param_nn
+
+set.seed( 1234 )
+n_neighbs <- c( 5, 15, 50 )
+sce <- sces[[1]]
+umap_test_n_neighb <- map( n_neighbs, function( i ) {
+  umap_train <- umap( t( assays( sce )$flowvs ), n_neighbors = i )
+  reducedDim( sce, "UMAP") <- umap_train
+  sce
+}) %>%
+  setNames( n_neighbs )
+
+umap_plots <- umap_test_n_neighb %>%
+  map( plotDR, "UMAP", assay = "flowvs", color_by = "sample_id" )
+
+umap_plots <- names( umap_plots ) %>%
+  map( function( i ) {
+    umap_plots[[ i ]] +
+      labs( title = paste0( "n_neighbours = ", i ) )
+  } ) %>%
+  setNames( names( umap_plots ) )
+
+print( umap_plots[[1]] )
+print( umap_plots[[2]] )
+print( umap_plots[[3]] )
+
+```
+
+#### min_dist
+
+```{r}
+#| label: umap_param_md
+
+set.seed( 1234 )
+min_dist <- c( 0.01, 0.1, 0.5 )
+sce <- sces[[1]]
+umap_test_min_dist <- map( min_dist, function( i ) {
+  umap_train <- umap( t( assays( sce )$flowvs ), n_neighbors = 15, min_dist = i )
+  reducedDim( sce, "UMAP") <- umap_train
+  sce
+}) %>%
+  setNames( min_dist )
+
+umap_plots <- umap_test_min_dist %>%
+  map( plotDR, "UMAP", assay = "flowvs", color_by = "sample_id" )
+
+umap_plots <- names( umap_plots ) %>%
+  map( function( i ) {
+    umap_plots[[ i ]] +
+      labs( title = paste0( "min_dist = ", i ) )
+  } ) %>%
+  setNames( names( umap_plots ) )
+
+print( umap_plots[[1]] )
+print( umap_plots[[2]] )
+print( umap_plots[[3]] )
+```
+
+## UMAP merged
+
+```{r}
+#| label: umap_merged
+
+umap_merged_file <- file.path( script_home, "sce_merged.rds")
+if( file.exists( umap_merged_file ) ) {
+  sce_merged <- readRDS( umap_merged_file )
+} else {
+  set.seed( 1234 )
+  umap_merged <- umap( t( assays( sce_merged )$flowvs ), 
+                       n_neighbors = 15, 
+                       min_dist = 0.1 )
+  reducedDim( sce_merged, "UMAP" ) <- umap_merged
+  saveRDS( sce_merged, file = sce_merged )
+}
+umap_plot <- plotDR( sce_merged, "UMAP", assay = "flowvs", color_by = "sample_id")
+print( umap_plot )
+```
+
+### Antibody expression
+
+```{r}
+#| label: antibody_exprs
+
+ab_map_plots_file <- file.path( script_home, "ab_map_plots.rds" )
+if( file.exists( ab_map_plots_file ) ) {
+    ab_map_plots <- readRDS( ab_map_plots_file )
+} else {
+    ab_umap_plots <- rowData( sce_merged )$antibody %>%
+	  map( function( i ) {
+   	   plotDR( sce_merged, "UMAP", assay = "flowvs", color_by = i )
+    	} ) %>%
+    setNames( rowData( sce_merged )$antibody )
+    saveRDS( ab_umap_plots, file = ab_map_plots_file )
+}
+```
+
+::: panel-tabset
+```{r}
+#| label: render_antibody_exprs
+#| results: asis
+#| echo: false
+
+iwalk( ab_umap_plots, function( gg, label ) { 
+  cat('#### ', label, '\n\n')
+  grid.newpage()
+  grid.draw( gg )
+  cat( " \n\n" )
+} )
+```
+:::
+
+## Clustering
+
+The CATALYST package provides functions to first cluster flow cytometry data with FlowSOM clustering and subsequently perform an UMAP or tSNE with the metacluster labels. Advantage of FlowSOM clustering is the speed of the algorithm and you don't need to downsample or split your dataset if the exploratory phase is over.
+
+With maxK you specify the number of clusters. The number of clusters to choose can be difficult. First, you need to ask yourself how many clusters would you expect in your data.You can also use the UMAP of the earlier steps to guide you in choice for number of clusters. Plotting median expression of markers in that UMAP can help to see the number of populations you would expect. Vary the number of clusters to find what best fits your data and is biological relevant.
+
+```{r}
+#| label: clustering
+
+set.seed(1234)
+assays( sce_merged )$exprs <- assays( sce_merged )$flowvs
+sce_merged <- cluster( sce_merged, features=NULL, maxK=20, seed=1234 )
+saveRDS( sce_merged, file = sce_merged )
+```
+
+```{r}
+#| label: cluster_plots
+#| message: false
+
+meta_clusters <- names( cluster_codes( sce_merged ) )
+cluster_plots <- meta_clusters %>%
+  map( function( x ) {
+    plotDR( sce_merged, "UMAP", color_by=x )
+  } ) %>%
+  setNames( meta_clusters )
+saveRDS( cluster_plots, file = file.path( script_home, "cluster_plots.rds" ) )
+```
+
+::: panel-tabset
+```{r}
+#| label: render_cluster_plots
+#| results: asis
+#| echo: false
+
+iwalk( cluster_plots, function( gg, label ) { 
+  cat('#### ', label, '\n\n')
+  grid.newpage()
+  grid.draw( gg )
+  cat( " \n\n" )
+} )
+```
+:::
+
+#Heatmap of the median expression per marker per metacluster or sample, more information can be found in https://bioconductor.org/packages/release/bioc/html/CATALYST.html
+
+#plotExprHeatmap(sce, features = "type", by="cluster_id",k="meta12",scale = "last", q = 0, perc=TRUE,bars = FALSE)
+
+#plotExprHeatmap(sce, features = "type", by="sample_id",k="meta12",scale = "last", q = 0, perc=TRUE,bars = FALSE) #this plot can also be used to check for batch effects
+
+#Cell_freq_clusters \<- plotAbundances(sce, k = "meta12", group_by = "sample_id") #print(Cell_freq_clusters) #Cell_freq_clusters_data \<- Cell_freq_clusters\[\["data"\]\] #write.xlsx(x=Cell_freq_clusters_data, file="Cellclusterfrequencies.xlsx")
+
+\`\`\`

@@ -1,0 +1,48 @@
+---
+title: "Introduction"
+author: "Phil East"
+format: html
+editor: visual
+date: "17/02/2022"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( tidyverse )
+library( DT )
+```
+
+# Introduction
+
+This analysis follows the workflow published here:
+
+[Workflow review](https://www.frontiersin.org/journals/immunology/articles/10.3389/fimmu.2021.768113/full) [Workflow code](https://github.com/HdBraanker/Spectral_Flow_Workflow/blob/main/script.Rmd)
+
+## Experimental Design
+
+```{r}
+#| label: design
+
+exp_design_file <- file.path( "/project/data/sample_info.csv")
+flow_data_home <- file.path( "/project/data/24w17_sct050_kpar_ado_spectral_cyto/01_input/FlowJo_preprocessed_files/")
+script_home <- file.path( "/project", "analyses", "preprocess" )
+
+pdat <- read.csv( file = exp_design_file ) %>%
+  mutate( sample_id = paste( mouse, sample, sep = "_" ) )
+
+pdat %>%
+  DT::datatable( )
+```
+
+## Antibody Panel

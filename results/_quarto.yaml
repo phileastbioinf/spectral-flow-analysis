@@ -1,0 +1,10 @@
+metadata-files:
+  - _configs/default/book.yaml
+  - _configs/default/execute.yaml
+  - _configs/default/format.yaml
+  - _configs/default/project.yaml
+    #  - _configs/default/website.yaml
+
+  - _configs/project/book.yaml
+  - _configs/project/metadata.yaml
+    #   - _configs/project/website.yaml

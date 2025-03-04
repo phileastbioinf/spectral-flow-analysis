@@ -1,0 +1,249 @@
+---
+title: "Preprocess"
+author: "Phil East"
+format: html
+editor: visual
+date: "14/08/2024"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE,message=FALSE)
+options(cache = TRUE, cache.lazy = FALSE)
+
+```
+
+# Preprocess
+
+We read in the spectral flow data and construct SingleCellExperiment objects for each sample. We then assess the individual antibody florecence distributions to determine the best transformation and normalisation.
+
+## FlowCore
+
+### flowSet
+
+`colnames( fs )` returns names of measured covariates per cell (columns in matrix) such as antibodies and autofluorescence channels.
+
+`phenoData( fs )` returns sample metadata table as an AnnotatedDataFrame.
+
+`pData( fs )` returns sample metadata table as a data.frame.
+
+`varLabels( fs )` returns colnames of sample metadata table.
+
+`sampleNames( fs )` returns rownames or sample names from sample metadata table.
+
+### flowFrame
+
+`keyword( fs[[1]] )` returns all parameters associated with each spectral flow sample.
+
+```{r}
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( SingleCellExperiment)
+library( Spectre )
+library( flowCore )
+library( tidyverse )
+library( DT )
+library( grid )
+library( patchwork )
+library( flowTrans )
+library( flowViz )
+library( flowVS )
+
+jsc <- 'function(settings, json) { $(this).parents(".datatables").remove(); }'
+
+options(bitmapType='cairo')
+
+flow_data_home <- file.path( "/project/data/240904_preprocessed_240903_unmixed")
+exp_design_file <- file.path( flow_data_home, "SCT051_sample_list.csv" )
+script_home <- file.path( "/project", "analyses", "preprocess" )
+```
+
+```{r}
+#| include: FALSE
+# Init Step to make sure that the dependencies are loaded
+htmltools::tagList(datatable(mtcars))
+```
+
+## Data In
+
+We read in the FCS files using `flowCore` and create a `flowset` object containg per-sample `flow` data objects containing all cells.
+
+```{r}
+#| label: read_fcs
+
+pdat <- read.csv( file = exp_design_file ) %>%
+  mutate( sample_id = mouse )
+ab_col_ind <- c( 10:42, 44, 45 )
+
+flowset_file <- file.path( script_home, "spectral-flowset.rds" )
+if( file.exists( flowset_file )) {
+   fs <- readRDS( flowset_file )
+} else {
+  # Find all FCS in the directory
+  fcs_file_paths <- pdat$file %>%
+    file.path( flow_data_home, . ) %>%
+    setNames( pdat$sample_id )
+  fs <- read.flowSet( fcs_file_paths )
+  colnames( fs )[ab_col_ind] <- ( fs[[1]]@parameters$desc )[ab_col_ind]
+  colnames( fs ) <- gsub( "[ -]", "_", colnames( fs ))
+  sampleNames( fs ) <- pdat$sample_id
+  saveRDS( fs, flowset_file )
+}
+```
+
+## Summary stats
+
+We first looked at the summary stats for each of the anitbodies across all samples.
+
+```{r}
+#| label: summary_stats
+
+summary_stats <- fs %>%
+  map( summary ) %>%
+  map( t ) %>%
+  map( as.data.frame ) %>%
+  map( round ) %>%
+  map( rownames_to_column, var = "antibody" ) %>%
+  map( DT::datatable ) %>%
+  setNames( sampleNames( fs ) )
+```
+
+::: panel-tabset
+```{r}
+#| label: render_summary_stats
+#| results: asis
+#| echo: false
+
+datatable(matrix(NA, 2, 2), options = list("initComplete" = JS(jsc)))
+
+iwalk( summary_stats, ~ {
+    cat(sprintf("\n### %s\n\n", .y))
+    print( htmltools::tagList( .x ) )
+    cat( ' \n\n')
+} )
+```
+:::
+
+## PnE values
+
+These values encode whether the fluorescent values for a given antibody have been encoded and should linearised when read in. `0,0` indicates no transformation.
+
+```{r}
+#| label: pne
+
+keyword( fs[[1]], paste0( "$P", 1:36, "E")) %>%
+  as.data.frame( ) %>%
+  t( ) %>%
+  as.data.frame() %>%
+  rownames_to_column( var = "keyword" ) %>%
+  mutate( keyword = sub( "X\\.", "", keyword )) %>%
+  DT::datatable()
+```
+
+## Background metrics
+
+We plotted the distributions of FSC.A, SSC.A and FJComp.AF.A.
+
+```{r}
+#| label: bg_metrics
+
+bg_density_plot_file <- file.path( script_home, "bg_density_plots.rds" )
+if( file.exists( bg_density_plot_file ) ) {
+  bg_density_plots <- readRDS( bg_density_plot_file )
+} else {
+  bg_density_plots <- fs_sub %>% 
+    map( function( ff ) {
+      ff@exprs[, c( 1:9, 43, 46 ) ] %>%
+        as.data.frame( ) %>% 
+        gather( bg_metric, intensity ) %>%
+        ggplot( aes( x = intensity, fill = bg_metric, colour = bg_metric )) +
+        geom_density( alpha = 0.2 ) +
+        labs( x = "bg intensity") +
+        scale_x_log10()
+    } )
+  saveRDS( bg_density_plots, bg_density_plot_file )
+}
+```
+
+### Distributions
+
+::: panel-tabset
+```{r}
+#| label: render_bg_dist_plots
+#| fig-width: 12
+#| fig-cap: backgrond density plots
+#| results: asis
+#| echo: false
+
+iwalk( bg_density_plots, function( gg, label ) { 
+  cat('#### ', label, '\n\n')
+  grid::grid.newpage()
+  grid::grid.draw( gg )
+  cat( " \n\n" )
+})
+```
+:::
+
+## Raw fluoresence distributions
+
+```{r}
+#| label: raw_fluor_dists
+#| warning: false
+
+raw_density_plot_file <- file.path( script_home, "raw_fluorescence_density_plots.rds" )
+if( file.exists( raw_density_plot_file ) ) {
+  raw_density_plots <- readRDS( raw_density_plot_file )
+} else {
+  raw_density_plots <- fs_sub %>% 
+    map( function( ff ) {
+      ff@exprs[, ab_col_ind ] %>%
+        as.data.frame( ) %>%
+        gather( antibody, intensity ) %>%
+        left_join( antibody_group, by = "antibody" ) %>%
+        group_split( group_6 ) %>%
+        map( function( df ) {
+          ggplot( df, aes( x = intensity, fill = antibody, colour = antibody )) +
+          geom_density( alpha = 0.2 ) +
+          labs( x = "fluorescence intensity") +
+          xlim( -5000, 10000 )
+        } )
+    } ) %>%
+    setNames( sampleNames( fs_sub ) )
+  saveRDS( raw_density_plots, raw_density_plot_file )
+}
+```
+
+### Distributions
+
+::: panel-tabset
+
+```{r}
+#| label: render_raw_fluor_dist_plots
+#| fig-width: 12
+#| fig-height: 18
+#| fig-cap: raw fluorescence density plots
+#| results: asis
+#| echo: false
+#| warning: false
+
+iwalk( raw_density_plots, function( ggl, label ) { 
+  gg <- ggl |> wrap_plots( ncol = 1, heights = unit( 5, "cm" ))
+  cat('#### ', label, '\n\n')
+  grid::grid.newpage()
+  grid::grid.draw( gg )
+  cat( " \n\n" )
+})
+```
+:::
