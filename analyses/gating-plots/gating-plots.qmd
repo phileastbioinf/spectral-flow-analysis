@@ -1,0 +1,113 @@
+---
+title: "Pairwise gating plots"
+author: "Phil East"
+format: html
+editor: visual
+date: "14/08/2024"
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE,message=FALSE)
+options(cache = TRUE, cache.lazy = FALSE)
+
+```
+
+```{r}
+#| label: r_init
+#| results: 'hide'
+#| warning: FALSE
+#| message: FALSE
+
+library( SingleCellExperiment)
+library( Spectre )
+library( flowCore )
+library( tidyverse )
+library( DT )
+
+library( flowViz )
+library( flowVS )
+library( flowAI )
+library( PeacoQC )
+library( CATALYST )
+library( CytoNorm )
+library( uwot )
+library( grid )
+library( ggplot2 )
+library( CytoPipeline )
+library( patchwork )
+
+transformation_home <- file.path( "/project", "analyses", "transformation" )
+flowset_file <- file.path( transformation_home, "fs_sub_flowvs.rds" )
+
+script_home <- file.path( "/project", "analyses", "gating-plots" )
+
+Downsampling_FlowSet <- function(x, samplesize , replace=TRUE, prob=NULL){
+  if(missing(samplesize))
+    samplesize <- min(flowCore::fsApply(x,nrow))
+  flowCore::fsApply(x, function(ff){
+    if( samplesize > nrow( ff ) ) samplesize <- nrow( ff )
+    i <- sample(nrow(ff), size = samplesize, replace=replace, prob)
+    ff[i,]
+  })
+}
+```
+
+# Introduction
+
+We generated traditional flow cytometry pairwise scatter plots to assess the compensation QC. We used the CytoPipeline bioconductor package to generate the plots.
+
+## Plots
+
+```{r}
+#| label: scatterplots
+
+fs <- readRDS( flowset_file )
+fs_samp <- Downsampling_FlowSet( fs, 1e4, replace = FALSE )
+
+ab_col_ind <- c( 10:42, 44, 45 )
+
+baseline <- "CD4"
+abs <- colnames( fs_samp[[ 1 ]] )[ ab_col_ind ]
+ab_pairings <- abs %>% 
+  map( c, baseline ) %>%
+  setNames( abs )
+ab_pairings <- ab_pairings[ names( ab_pairings ) != baseline]
+
+scatter_ggs <- fs_samp %>%
+  map( function( ff ) {
+    ggs <- ab_pairings %>%
+      map( function( pair ) {
+        ggplotEvents( ff, xChannel = pair[ 2 ], yChannel = pair[ 1 ] )
+      } )
+    wrap_plots( ggs, ncol = 2 )
+  } ) %>%
+    setNames( sampleNames( fs ) )
+  
+```
+
+::: panel-tabset
+```{r}
+#| label: render_plots
+#| results: asis
+#| echo: false
+#| fig.width: 10
+#| fig.height: 70
+
+iwalk( scatter_ggs, function( gg, label ) { 
+  cat('### ', label, '\n\n')
+  grid::grid.newpage()
+  grid::grid.draw( gg )
+  cat( " \n\n" )
+} )
+```
+:::
